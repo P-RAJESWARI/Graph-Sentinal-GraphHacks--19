@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GraphSentinel AI</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/standalone/umd/vis-network.min.js"></script>
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--ink:#e2e8f0;--mut:#94a3b8;--acc:#38bdf8;--bad:#f87171;--ok:#4ade80;--warn:#fbbf24}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,sans-serif}
+header{padding:14px 20px;border-bottom:1px solid #334155;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+h1{font-size:18px;margin:0}h1 span{color:var(--acc)}.tag{font-size:11px;color:var(--mut)}
+main{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:14px;max-width:1400px;margin:auto}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border-radius:10px;padding:14px}.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 10px}
+button{background:var(--acc);color:#04202e;border:0;border-radius:6px;padding:7px 12px;font-weight:600;cursor:pointer}
+button.alt{background:#334155;color:var(--ink)}button:disabled{opacity:.5}
+input,select{background:#0b1220;color:var(--ink);border:1px solid #334155;border-radius:6px;padding:7px;min-width:0}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}.inc{padding:8px;border:1px solid #334155;border-radius:8px;margin-bottom:6px;cursor:pointer}
+.inc:hover{border-color:var(--acc)}.sev{font-weight:700;color:var(--bad)}
+#graph{height:360px;background:#0b1220;border-radius:8px}.full{grid-column:1/-1}
+.sus{border-left:3px solid var(--bad);padding:6px 10px;margin:6px 0;background:#0b1220;border-radius:6px}
+.bar{height:6px;background:#334155;border-radius:3px;overflow:hidden;margin-top:4px}.bar i{display:block;height:100%;background:var(--acc)}
+.tr div{padding:3px 0;border-bottom:1px dashed #334155;font-size:12px}.tr b{color:var(--acc)}
+.pill{display:inline-block;background:#334155;border-radius:99px;padding:1px 8px;font-size:11px;margin-right:4px}
+small,.mut{color:var(--mut)}pre{white-space:pre-wrap;margin:0}
+</style></head><body>
+<header><h1>Graph<span>Sentinel</span> AI</h1><span class="tag">Incident root-cause agents on a FalkorDB company graph · synthetic data</span>
+<span style="flex:1"></span>
+<label class="tag">tenant <input id="tenant" value="acme" size="6" onchange="load()"></label><label class="tag">user <input id="user" value="demo-user" size="9"></label>
+<button class="alt" onclick="reseed()">Reset demo data</button></header>
+<main>
+<section class="card"><h2>Open incidents</h2><div id="incs"></div>
+<h2 style="margin-top:14px">Ask the company brain</h2>
+<div class="row"><input id="q" style="flex:1" placeholder="who owns payments-api? · why decisions on fraud-service · what depends on redis-cache · investigate INC-201"><button onclick="ask()">Ask</button></div>
+<div id="answer" class="mut"></div></section>
+<section class="card"><h2>Evidence graph (how the answer was reached)</h2><div id="graph"></div></section>
+<section class="card full" id="report" style="display:none"></section>
+<section class="card"><h2>Agent trace &amp; hand-offs</h2><div class="tr" id="trace"><span class="mut">Run an investigation.</span></div></section>
+<section class="card"><h2>Persistent memory <button class="alt" onclick="mem()" style="float:right;padding:2px 8px">refresh</button></h2><div id="mem" class="mut"></div></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);let cur=null;
+const ident=()=>({tenant:$('tenant').value,user:$('user').value});
+const api=(p,b)=>fetch(p,b?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}:{}).then(r=>r.json());
+const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const COL={incident:'#f87171',service:'#38bdf8',deployment:'#fbbf24',person:'#a78bfa',history:'#94a3b8',decision:'#4ade80',document:'#f472b6'};
+let net;function draw(g){const nodes=g.nodes.map(n=>({id:n.id,label:n.label,color:COL[n.kind]||'#888',shape:n.kind==='service'?'box':'dot',font:{color:'#e2e8f0'}}));
+const edges=g.edges.map(e=>({from:e.from,to:e.to,label:e.label,arrows:'to',font:{color:'#94a3b8',size:9,strokeWidth:0},color:'#64748b'}));
+net=new vis.Network($('graph'),{nodes:new vis.DataSet(nodes),edges:new vis.DataSet(edges)},{physics:{stabilization:true},layout:{improvedLayout:true}});}
+async function load(){const r=await api('/api/incidents?tenant='+encodeURIComponent($('tenant').value));$('incs').innerHTML=r.map(i=>`<div class="inc" onclick="run('${i.id}')"><span class="sev">${i.severity}</span> <b>${i.id}</b> ${esc(i.title)}<br><small>${i.service}</small></div>`).join('')||'<span class="mut">None open (reset demo data)</span>';
+const o=await api('/api/overview?tenant='+encodeURIComponent($('tenant').value));draw({nodes:o.nodes.map(n=>({id:n.name,label:n.name,kind:'service'})),edges:o.edges.map(e=>({from:e.a,to:e.b,label:'DEPENDS_ON'}))});mem();}
+async function run(id){cur=id;$('trace').innerHTML='<span class="mut">Agents working…</span>';
+const r=await api(`/api/incidents/${id}/investigate`,{question:'',...ident()});show(r);}
+function show(r){if(!r.ranked){return}draw(r.graph);const top=r.ranked[0];
+$('trace').innerHTML=r.trace.map(t=>`<div><b>${esc(t.agent)}</b> · ${esc(t.tool)}<br>${esc(t.result)}</div>`).join('');
+$('report').style.display='block';
+$('report').innerHTML=`<h2>${esc(r.incident.id)} · ${esc(r.incident.title)}</h2><p><b>${esc(r.summary)}</b></p>
+${r.memory_recalled.length?`<p class="mut">🧠 Recalled: ${r.memory_recalled.map(m=>esc(m.summary)).join(' | ')}</p>`:''}
+<h2>Ranked suspects (explainable score)</h2>${r.ranked.slice(0,3).map(s=>`<div class="sus"><b>${s.dep_id}</b> ${s.service} v${s.version} <span class="pill">${s.change_type}</span> score <b>${s.score}</b>
+<div class="bar"><i style="width:${Math.min(100,s.score)}%"></i></div><small>recency ${s.breakdown.recency} · proximity ${s.breakdown.proximity} · history ${s.breakdown.history} · memory ${s.breakdown.memory}</small>
+<ul>${s.reasons.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`).join('')}
+<h2>Blast radius</h2>${r.blast_radius.map(b=>`<span class="pill">${b.service} (${b.hops} hop, ${b.team})</span>`).join('')}
+<h2 style="margin-top:12px">Remediation</h2><p>Page <b>${esc(r.remediation.page)}</b> (${esc(r.remediation.team)}). Runbook: ${esc(r.remediation.procedure?.title)} — <small>${esc(r.remediation.procedure?.steps)}</small></p>
+<p class="mut">Sources: ${r.remediation.docs.map(d=>`<span class="pill">${d.id} ${esc(d.title)}</span>`).join('')}</p>
+<div class="row"><button onclick="approve('${r.remediation.action.id}')">Approve rollback of ${top.dep_id}</button>
+<button class="alt" onclick="confirmRC('${top.dep_id}')">Confirm root cause (teach the agent)</button></div><div id="msg" class="mut"></div>`;}
+async function approve(id){$('msg').textContent=(await api(`/api/actions/${id}/approve`,ident())).note}
+async function confirmRC(d){await api(`/api/incidents/${cur}/confirm`,{deployment_id:d,...ident()});$('msg').textContent='Learned. Semantic memory updated; incident resolved and added to company knowledge.';load();}
+async function ask(){const r=await api('/api/ask',{question:$('q').value,...ident()});if(r.intent==='investigate'){cur=r.incident.id;show(r);$('answer').textContent=r.summary;return}
+$('answer').innerHTML=`<b>${esc(r.answer)}</b><br><small>${(r.sources||[]).length} graph rows as sources</small><pre class="mut">${esc(JSON.stringify(r.sources,null,1).slice(0,700))}</pre>`;}
+async function mem(){const m=await api(`/api/memory?tenant=${$('tenant').value}&user=${$('user').value}`);
+$('mem').innerHTML=`<b>Facts (semantic)</b><br>${m.facts.map(f=>`<span class="pill">${esc(f.statement)} ×${f.confirmations}</span>`).join('')||'none yet'}<br><br><b>Episodes</b><br>${m.episodes.map(e=>`<div>• ${esc(e.summary)}</div>`).join('')||'none yet'}`;}
+async function reseed(){await api('/api/seed',{});$('report').style.display='none';load();}
+load();
+</script></body></html>

@@ -1,0 +1,23 @@
+services:
+  falkordb:
+    image: falkordb/falkordb:latest
+    ports:
+      - "6379:6379"   # Redis protocol / Cypher
+      - "3000:3000"   # FalkorDB Browser UI
+    volumes:
+      - falkordb_data:/var/lib/falkordb/data
+    environment:
+      - FALKORDB_ARGS=--save 60 1 --appendonly yes
+  api:
+    build: .
+    depends_on:
+      - falkordb
+    restart: on-failure
+    environment:
+      - FALKORDB_HOST=falkordb
+      - FALKORDB_PORT=6379
+      - GRAPH_NAME=graphsentinel
+    ports:
+      - "8000:8000"
+volumes:
+  falkordb_data:
